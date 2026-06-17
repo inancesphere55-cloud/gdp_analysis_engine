@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ ninja-build
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Import check
+        run: |
+          python -c "import gdp_engine; print('C++ module OK:', dir(gdp_engine))"
+          python -c "from python.data_collector import MacroDataCollector; print('Data collector OK')"
+          python -c "from python.analytics import MacroAnalytics; print('Analytics OK')"
+          python -c "from python.reporting import ResearchReporter; print('Reporting OK')"
+
+      - name: Lint
+        run: |
+          pip install ruff
+          ruff check python/ streamlit_app.py run.py app.py

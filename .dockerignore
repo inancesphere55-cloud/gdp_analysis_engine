@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.egg-info
+.env
+.git
+node_modules
+data/cache
+frontend
+*.pyc
+.DS_Store
