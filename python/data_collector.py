@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from fredapi import Fred
 
-from gdp_engine import GDPAnalyzer, BacktestEngine, DataPoint
+from gdp_engine import GDPAnalyzer, BacktestEngine, DataPoint, regime_to_string
 
 FRED_SERIES = {
     "gdp": "GDPC1",
@@ -233,7 +233,7 @@ def _days_since_gdp(collector: MacroDataCollector) -> tuple[int | None, date | N
 
 def _apply_pending_rule(
     collector: MacroDataCollector, data: dict,
-) -> tuple[str, int, str, int | None]:
+) -> tuple[str, int, str, int | None, object | None, dict]:
     days_since, release = _days_since_gdp(collector)
     if days_since is not None and days_since <= PENDING_WINDOW_DAYS:
         remaining = PENDING_WINDOW_DAYS - days_since
@@ -242,12 +242,12 @@ def _apply_pending_rule(
             f"GDP released {release}. Analysis will finalize after "
             f"{PENDING_WINDOW_DAYS}-day confirmation window."
         )
-        return "PENDING", 0, reason, remaining
-    signal, confidence, reason = _run_ensemble_analysis(data)
-    return signal, confidence, reason, None
+        return "PENDING", 0, reason, remaining, None, {}
+    signal, confidence, reason, regime, extra = _run_ensemble_analysis(data)
+    return signal, confidence, reason, None, regime, extra
 
 
-def _run_ensemble_analysis(data: dict) -> tuple[str, int, str]:
+def _run_ensemble_analysis(data: dict) -> tuple[str, int, str, object, dict]:
     analyzer = GDPAnalyzer(
         cpi=data["cpi"],
         core_gdp=data["core_gdp"],
@@ -259,7 +259,28 @@ def _run_ensemble_analysis(data: dict) -> tuple[str, int, str]:
         consumer_sentiment=data.get("consumer_sentiment", 0.0),
         yield_spread_10y2y=data.get("yield_spread_10y2y", 0.0),
     )
-    return analyzer.signal, analyzer.confidence, analyzer.reason
+
+    votes = analyzer.get_model_votes()
+    vote_details = {}
+    names = ["InflationVeto", "TaylorRule", "DollarStrength",
+             "BondSignal", "CreditSpread", "LaborMarket", "GlobalRisk"]
+    for i, v in enumerate(votes):
+        vote_details[names[i]] = {
+            "signal": v.signal,
+            "confidence": v.confidence,
+            "numeric_value": v.numeric_value,
+            "reason": v.reason,
+        }
+
+    extra = {
+        "model_votes": vote_details,
+        "dominant_model": analyzer.get_dominant_model(),
+        "model_agreement": analyzer.get_model_agreement(),
+        "signal_strength": analyzer.get_signal_strength(),
+        "ensemble_value": analyzer.get_ensemble_numeric_value(),
+    }
+
+    return analyzer.signal, analyzer.confidence, analyzer.reason, analyzer.get_regime(), extra
 
 
 def run_analysis(api_key: str | None = None) -> dict:
@@ -272,7 +293,7 @@ def run_analysis(api_key: str | None = None) -> dict:
     print(f"  GDP RESEARCH ENGINE - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
     collector = MacroDataCollector(api_key)
     data = collector.get_all()
-    signal, confidence, reason, days_remaining = _apply_pending_rule(collector, data)
+    signal, confidence, reason, days_remaining, regime, extra = _apply_pending_rule(collector, data)
 
     result = {
         "timestamp": datetime.utcnow().isoformat(),
@@ -281,6 +302,8 @@ def run_analysis(api_key: str | None = None) -> dict:
         "confidence": confidence,
         "reason": reason,
         "days_remaining": days_remaining,
+        "regime": regime,
+        **extra,
     }
 
     _log_to_csv(result)
@@ -310,11 +333,102 @@ def _log_to_csv(result: dict):
     print(f"  Logged to: {log_path}")
 
 
+def _label(val, low, high, bullish_name, bearish_name):
+    if val >= high:
+        return f"[{bearish_name}]"
+    if val <= low:
+        return f"[{bullish_name}]"
+    return "[STABLE]"
+
+def _generate_insights(result: dict) -> list[dict]:
+    signal = result.get("signal", "HOLD")
+    confidence = result.get("confidence", 50)
+    regime_obj = result.get("regime")
+    model_votes = result.get("model_votes", {})
+    c = result.get("cpi", 0) or 0
+    d = result.get("dxy", 0) or 0
+    g = result.get("core_gdp", 0) or 0
+    n = result.get("nfp", 0) or 0
+    spread = result.get("yield_spread_10y2y", 0) or 0
+    unemp = result.get("unemployment", 0) or 0
+    sent = result.get("consumer_sentiment", 0) or 0
+
+    regime_name = "UNKNOWN"
+    if regime_obj:
+        regime_name = regime_to_string(regime_obj.regime)
+
+    insights = []
+
+    dos = []
+    donts = []
+
+    if signal in ("STRONG_BUY",):
+        dos.append("Increase equity exposure - strong bullish consensus")
+        donts.append("Maintain elevated cash positions or hedges")
+    elif signal == "BUY":
+        dos.append("Gradually add to risk assets on pullbacks")
+        donts.append("Short the market or increase hedges")
+    elif signal == "HOLD":
+        dos.append("Maintain current allocation; wait for clearer direction")
+        donts.append("Add new large positions or increase leverage")
+    elif signal == "SELL":
+        dos.append("Reduce equity exposure; raise cash levels")
+        donts.append("Chase rallies or add to existing longs")
+    elif signal == "STRONG_SELL":
+        dos.append("Move to full defensive posture; consider puts/hedges")
+        donts.append("Hold through the downturn unprotected")
+
+    if regime_name == "INFLATIONARY":
+        dos.append("Favor real assets, commodities, and TIPS")
+        donts.append("Hold long-duration bonds or nominal fixed income")
+    elif regime_name == "RECESSION":
+        dos.append("Favor defensive sectors and government bonds")
+        donts.append("Hold cyclical or commodity exposure")
+    elif regime_name == "STAGFLATION":
+        dos.append("Allocate to cash, short-duration bonds, and commodities")
+        donts.append("Hold equities or long-duration bonds")
+    elif regime_name == "EXPANSION":
+        dos.append("Stay invested in risk assets with upside bias")
+        donts.append("Over-hedge or sit in cash")
+    elif regime_name == "NORMAL":
+        dos.append("Follow ensemble signal direction for positioning")
+        donts.append("Take extreme or outsized positions")
+
+    for name, v in model_votes.items():
+        vsig = v["signal"]
+        if name == "InflationVeto" and vsig in ("SELL", "STRONG_SELL"):
+            if c > 3.5:
+                donts.append("Inflation headwind active - avoid inflation-sensitive longs")
+        if name == "DollarStrength" and vsig in ("SELL", "STRONG_SELL"):
+            if d > 105:
+                donts.append("Strong dollar pressures EM and commodity exposure")
+        if name == "LaborMarket" and vsig in ("BUY", "STRONG_BUY"):
+            if n < 150000:
+                dos.append("Soft labor market supports accommodative policy expectations")
+
+    if spread < -0.2:
+        donts.append("Yield curve inverted - recession signal active")
+    if sent < 70:
+        donts.append("Consumer sentiment depressed - consumer discretionary risk")
+    if unemp > 5.5:
+        donts.append("Rising unemployment suggests weakening economy")
+
+    dos = dos[:3]
+    donts = donts[:3]
+
+    for d_item in dos:
+        insights.append({"type": "DO", "text": d_item})
+    for d_item in donts:
+        insights.append({"type": "DON'T", "text": d_item})
+
+    return insights
+
+
 def _print_dashboard(result: dict):
     C = {"R": "\033[91m", "G": "\033[92m", "Y": "\033[93m",
          "B": "\033[94m", "M": "\033[95m", "0": "\033[0m"}
 
-    signal = result.get("signal", "—")
+    signal = result.get("signal", "-")
     confidence = result.get("confidence", 0)
     days_remaining = result.get("days_remaining")
 
@@ -329,42 +443,102 @@ def _print_dashboard(result: dict):
     n = result.get("nfp", 0) or 0
     d = result.get("dxy", 0) or 0
     ty = result.get("treasury_yield", 0) or 0
-    t3 = result.get("treasury_3m_change", 0) or 0
     unemp = result.get("unemployment", 0) or 0
     sent = result.get("consumer_sentiment", 0) or 0
     pmi_val = result.get("pmi", 0) or 0
     spread = result.get("yield_spread_10y2y", 0) or 0
     pmi_str = f"{pmi_val:>4.1f}" if pmi_val else "  N/A"
 
-    gdp_c = C["R"] if g > 2.5 else C["Y"] if g >= 1.5 else C["G"]
-    cpi_c = C["R"] if c > 3.5 else C["G"]
-    dxy_c = C["R"] if d > 105 else C["0"]
-    nfp_c = C["G"] if n > 200_000 else C["R"]
-
-    L = "+" + "-" * 64 + "+"
-    print(f"  {L}")
-    print(f"  |  GDP RESEARCH ENGINE v2.0 - ENSEMBLE SIGNAL{'':>12}|")
-    print(f"  |{'-' * 64}|")
-    print(f"  |  {ts_display:<62}|")
-    print(f"  |{'-' * 64}|")
-    print(f"  |  {gdp_c}GDP     {g:>6.2f}%   CPI  {cpi_c}{c:>5.2f}%   NFP   {nfp_c}{n:>7,.0f}{C['0']}{'':>14}|")
-    print(f"  |  DXY    {dxy_c}{d:>6.2f}   Unemp {unemp:>4.1f}%   PMI   {pmi_str}{'':>18}|")
-    print(f"  |  10Y    {ty:>5.2f}%   Spread {spread:>+5.2f}%   Sent  {sent:>5.1f}{'':>18}|")
-    print(f"  |{'-' * 64}|")
-    print(f"  |  Signal      {signal_color}{signal:<20}{C['0']}{'':>28}|")
-
-    if days_remaining is None:
-        conf_c = C["G"] if confidence >= 80 else C["Y"] if confidence >= 50 else C["R"]
-        print(f"  |  Confidence  {conf_c}{confidence:>3d}%{'':>50}{C['0']}|")
+    regime_obj = result.get("regime")
+    if regime_obj:
+        regime_name = regime_to_string(regime_obj.regime)
+        regime_conf_pct = max(
+            regime_obj.expansion_prob,
+            regime_obj.inflation_prob,
+            regime_obj.recession_prob,
+            regime_obj.stagflation_prob,
+            regime_obj.normal_prob,
+        ) * 100
     else:
-        print(f"  |  Confidence  --- (pending, {days_remaining}d remain){'':>27}|")
-    print(f"  |{'-' * 64}|")
+        regime_name = "UNKNOWN"
+        regime_conf_pct = 0
+
+    signal_strength = result.get("signal_strength", 0)
+    model_agreement = result.get("model_agreement", 0)
+    dominant_model = result.get("dominant_model", "NONE")
+    model_votes = result.get("model_votes", {})
+
+    cpi_label = "[VETO ACTIVE]" if c > 3.5 else _label(c, 2.0, 3.5, "DISINFLATION", "INFLATION")
+    gdp_label = _label(g, 1.5, 2.5, "STIMULUS NEEDED", "OVERHEATING")
+    nfp_label = _label(n / 1000, 100, 250, "WEAK", "OVERHEATED") if n else "[STABLE]"
+    dxy_label = _label(d, 95, 105, "RISK-ON", "BEARISH")
+
+    em_dash = "-"
+    L = "+" + "-" * 64 + "+"
+    D = "|" + "-" * 64 + "|"
+    bullet = "*"
+
+    print(f"  {L}")
+    print(f"  |  {'ENSEMBLE MACRO SIGNAL ENGINE':^62}|")
+    print(f"  |  {'DASHBOARD ' + em_dash + ' LIVE RUN':^62}|")
+    print(f"  {D}")
+    print(f"  |  Timestamp    : {ts_display:<44}|")
+
+    print(f"  {D}")
+    print(f"  |  CPI (YoY)    : {C['R'] if c > 3.5 else C['0']}{c:>8.2f}%  {cpi_label:<20}{C['0']}|")
+    print(f"  |  Core GDP     : {C['Y'] if g >= 1.5 else C['G']}{g:>8.2f}%  {gdp_label:<20}{C['0']}|")
+    print(f"  |  NFP          : {C['0']}{n:>8,.0f}  {nfp_label:<20}|")
+    print(f"  |  DXY          : {C['R'] if d > 105 else C['0']}{d:>8.2f}   {dxy_label:<20}{C['0']}|")
+    print(f"  |  10Y Yield    : {C['0']}{ty:>8.2f}%  [{'STABLE' if abs(spread) < 0.5 else 'INVERTED' if spread < 0 else 'STEEP'}]{'':>14}|")
+
+    print(f"  {D}")
+    print(f"  |  REGIME       : {regime_name:<51}|")
+    print(f"  |  Regime Confidence : {regime_conf_pct:>3.0f}%{'':>39}|")
+
+    print(f"  {D}")
+    print(f"  |  ENSEMBLE RESULT:{'':>48}|")
+    print(f"  |  {bullet} Final Signal       : {signal_color}{signal:<20}{C['0']}{'':>24}|")
+    if days_remaining is None:
+        print(f"  |  {bullet} Confidence         : {confidence:>3d}%{'':>39}|")
+    else:
+        print(f"  |  {bullet} Confidence         : --- (pending, {days_remaining}d remain){'':>14}|")
+    print(f"  |  {bullet} Signal Strength    : {signal_strength:.2f}{'':>38}|")
+    num_agree = int(model_agreement * 7 + 0.5)
+    print(f"  |  {bullet} Model Agreement    : {num_agree} of 7 models agree{'':>26}|")
+    print(f"  |  {bullet} Dominant Model     : {dominant_model:<20}{'':>23}|")
+
+    if model_votes:
+        print(f"  {D}")
+        print(f"  |  MODEL BREAKDOWN:{'':>47}|")
+        for name, v in model_votes.items():
+            sig_c = C["G"] if v["signal"] in ("BUY", "STRONG_BUY") else C["R"] if v["signal"] in ("SELL", "STRONG_SELL") else C["Y"]
+            print(f"  |  {bullet} {name:<16}: {sig_c}{v['signal']:<10} ({v['confidence']:>2d}% confidence){C['0']}{'':>17}|")
+
+    print(f"  {D}")
 
     rl = _wrap(result.get("reason", ""), 58)
-    print(f"  |  Reason {rl[0]:<56}|")
+    print(f"  |  REASON: {rl[0]:<53}|")
     for ln in rl[1:]:
-        print(f"  |         {ln:<56}|")
-    print(f"  |{'-' * 64}|")
+        print(f"  |         {ln:<54}|")
+
+    insights = _generate_insights(result)
+    if insights:
+        print(f"  |{'=' * 64}|")
+        print(f"  |  ACTIONABLE INSIGHTS:{'':>44}|")
+        for ins in insights:
+            if ins["type"] == "DO":
+                c_tag = C["G"]
+                tag = "DO"
+            else:
+                c_tag = C["R"]
+                tag = "DONT"
+            wrapped = _wrap(ins["text"], 50)
+            print(f"  |  {c_tag}{tag:<6}{wrapped[0]:<50}{C['0']}|")
+            for ln in wrapped[1:]:
+                print(f"  |  {'':<6}{ln:<50}|")
+        print(f"  |{'=' * 64}|")
+
+    print(f"  {L}")
     print()
 
 

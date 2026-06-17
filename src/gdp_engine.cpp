@@ -157,36 +157,21 @@ InflationVetoModel::InflationVetoModel(double cpi, double core_gdp, double nfp)
 SignalVote InflationVetoModel::evaluate() const {
     SignalVote vote{};
 
-    if (m_cpi > 4.5) {
-        vote.signal = "STRONG_SELL";
-        vote.confidence = 95;
-        vote.numeric_value = -2.0;
-        vote.reason = "CPI at " + std::to_string(m_cpi) + "% - critical inflation veto";
-    } else if (m_cpi > 3.5) {
+    if (m_cpi > 3.5) {
         vote.signal = "SELL";
-        vote.confidence = 80;
+        vote.confidence = 90;
         vote.numeric_value = -1.5;
         vote.reason = "CPI at " + std::to_string(m_cpi) + "% - inflation veto triggered";
-    } else if (m_cpi > 2.5) {
-        vote.signal = "HOLD";
-        vote.confidence = 55;
-        vote.numeric_value = -0.5;
-        vote.reason = "CPI at " + std::to_string(m_cpi) + "% - elevated but not critical";
-    } else if (m_core_gdp < 1.0 && m_nfp < 150000) {
-        vote.signal = "STRONG_BUY";
-        vote.confidence = 85;
-        vote.numeric_value = 2.0;
-        vote.reason = "Low CPI (" + std::to_string(m_cpi) + "%) + weak GDP + weak labor";
-    } else if (m_core_gdp < 1.5) {
+    } else if (m_cpi < 3.0 && m_core_gdp < 1.5) {
         vote.signal = "BUY";
-        vote.confidence = 70;
+        vote.confidence = 65;
         vote.numeric_value = 1.0;
         vote.reason = "Controlled CPI (" + std::to_string(m_cpi) + "%) + weak GDP";
     } else {
         vote.signal = "HOLD";
         vote.confidence = 50;
         vote.numeric_value = 0.0;
-        vote.reason = "CPI controlled at " + std::to_string(m_cpi) + "%";
+        vote.reason = "CPI at " + std::to_string(m_cpi) + "% - within tolerance";
     }
 
     return vote;
@@ -445,12 +430,13 @@ std::vector<SignalVote> GDPAnalyzer::getModelVotes() const {
 
 double GDPAnalyzer::getEnsembleNumericValue() const {
     auto votes = getModelVotes();
+    static const double MODEL_WEIGHTS[7] = {0.25, 0.20, 0.15, 0.12, 0.10, 0.10, 0.08};
     double sum = 0.0;
     double weight_sum = 0.0;
 
-    for (const auto& v : votes) {
-        double w = static_cast<double>(v.confidence) / 100.0;
-        sum += v.numeric_value * w;
+    for (size_t i = 0; i < votes.size(); ++i) {
+        double w = MODEL_WEIGHTS[i] * (static_cast<double>(votes[i].confidence) / 100.0);
+        sum += votes[i].numeric_value * w;
         weight_sum += w;
     }
 
@@ -529,10 +515,10 @@ std::string GDPAnalyzer::getMethodologySummary() const {
 std::string GDPAnalyzer::getSignal() const {
     double ensemble_val = getEnsembleNumericValue();
 
-    if (ensemble_val <= -1.5) return "STRONG_SELL";
-    if (ensemble_val <= -0.5) return "SELL";
-    if (ensemble_val >= 1.5) return "STRONG_BUY";
-    if (ensemble_val >= 0.5) return "BUY";
+    if (ensemble_val <= -0.8) return "STRONG_SELL";
+    if (ensemble_val <= -0.3) return "SELL";
+    if (ensemble_val >= 0.8) return "STRONG_BUY";
+    if (ensemble_val >= 0.3) return "BUY";
     return "HOLD";
 }
 
