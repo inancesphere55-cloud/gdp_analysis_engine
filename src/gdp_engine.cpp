@@ -99,17 +99,19 @@ RegimeResult RegimeDetector::analyze() const {
 
 // ── Taylor Rule Model ───────────────────────────────────────────────
 
-TaylorRuleModel::TaylorRuleModel(double cpi, double core_gdp, double treasury_yield,
+TaylorRuleModel::TaylorRuleModel(double cpi, double core_gdp, double policy_rate,
                                  double unemployment_rate)
-    : m_cpi(cpi), m_core_gdp(core_gdp), m_treasury_yield(treasury_yield)
+    : m_cpi(cpi), m_core_gdp(core_gdp), m_treasury_yield(policy_rate)
     , m_unemployment_rate(unemployment_rate) {}
 
 SignalVote TaylorRuleModel::evaluate() const {
-    double real_rate = m_treasury_yield - m_cpi;
-    double neutral_rate = 2.0;
+    double r_star = 2.0;
+    double target_inflation = 2.0;
     double gdp_gap = m_core_gdp - 1.8;
-    double implied_rate = neutral_rate + (m_cpi - 2.0) + gdp_gap;
-    double policy_stance = real_rate - implied_rate;
+    double implied_rate = r_star + m_cpi
+                          + 0.5 * (m_cpi - target_inflation)
+                          + 0.5 * gdp_gap;
+    double policy_stance = m_treasury_yield - implied_rate;
 
     SignalVote vote{};
     vote.numeric_value = 0.0;
@@ -387,11 +389,13 @@ SignalVote GlobalRiskModel::evaluate() const {
 GDPAnalyzer::GDPAnalyzer(double cpi, double core_gdp, double nfp,
                          double dxy, double treasury_3m_pct_change,
                          double treasury_yield, double unemployment_rate,
-                         double consumer_sentiment, double yield_spread_10y2y)
+                         double consumer_sentiment, double yield_spread_10y2y,
+                         double policy_rate)
     : m_cpi(cpi), m_core_gdp(core_gdp), m_nfp(nfp), m_dxy(dxy)
     , m_treasury_3m(treasury_3m_pct_change), m_treasury_yield(treasury_yield)
     , m_unemployment_rate(unemployment_rate)
-    , m_consumer_sentiment(consumer_sentiment), m_yield_spread(yield_spread_10y2y) {}
+    , m_consumer_sentiment(consumer_sentiment), m_yield_spread(yield_spread_10y2y)
+    , m_policy_rate(policy_rate) {}
 
 RegimeResult GDPAnalyzer::getRegime() const {
     RegimeDetector detector(m_cpi, m_core_gdp, m_nfp, m_dxy, m_treasury_yield,
@@ -405,7 +409,8 @@ std::vector<SignalVote> GDPAnalyzer::getModelVotes() const {
     InflationVetoModel veto(m_cpi, m_core_gdp, m_nfp);
     votes.push_back(veto.evaluate());
 
-    TaylorRuleModel taylor(m_cpi, m_core_gdp, m_treasury_yield, m_unemployment_rate);
+    double policy = (m_policy_rate > 0.0) ? m_policy_rate : m_treasury_yield;
+    TaylorRuleModel taylor(m_cpi, m_core_gdp, policy, m_unemployment_rate);
     votes.push_back(taylor.evaluate());
 
     DollarStrengthModel dollar(m_dxy, m_treasury_3m, m_nfp);
@@ -472,15 +477,21 @@ double GDPAnalyzer::getModelAgreement() const {
     auto votes = getModelVotes();
     if (votes.empty()) return 0.0;
 
-    int buy = 0, sell = 0, hold = 0;
+    double ensemble_val = getEnsembleNumericValue();
+    std::string final_signal = getSignal();
+
+    int agreeing = 0;
     for (const auto& v : votes) {
-        if (v.numeric_value > 0.3) ++buy;
-        else if (v.numeric_value < -0.3) ++sell;
-        else ++hold;
+        if (final_signal == "HOLD") {
+            if (v.numeric_value > -0.3 && v.numeric_value < 0.3) ++agreeing;
+        } else if (final_signal == "STRONG_BUY" || final_signal == "BUY") {
+            if (v.numeric_value >= 0.3) ++agreeing;
+        } else {
+            if (v.numeric_value <= -0.3) ++agreeing;
+        }
     }
 
-    int max_votes = std::max({buy, sell, hold});
-    return static_cast<double>(max_votes) / votes.size();
+    return static_cast<double>(agreeing) / votes.size();
 }
 
 std::string GDPAnalyzer::getMethodologySummary() const {

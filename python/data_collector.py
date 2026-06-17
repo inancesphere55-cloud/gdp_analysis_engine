@@ -258,6 +258,7 @@ def _run_ensemble_analysis(data: dict) -> tuple[str, int, str, object, dict]:
         unemployment_rate=data.get("unemployment", 0.0),
         consumer_sentiment=data.get("consumer_sentiment", 0.0),
         yield_spread_10y2y=data.get("yield_spread_10y2y", 0.0),
+        policy_rate=data.get("fed_funds", 0.0),
     )
 
     votes = analyzer.get_model_votes()
@@ -504,7 +505,7 @@ def _print_dashboard(result: dict):
         print(f"  |  {bullet} Confidence         : --- (pending, {days_remaining}d remain){'':>14}|")
     print(f"  |  {bullet} Signal Strength    : {signal_strength:.2f}{'':>38}|")
     num_agree = int(model_agreement * 7 + 0.5)
-    print(f"  |  {bullet} Model Agreement    : {num_agree} of 7 models agree{'':>26}|")
+    print(f"  |  {bullet} Model Agreement    : {num_agree} of 7 agree ({signal}){'':>20}|")
     print(f"  |  {bullet} Dominant Model     : {dominant_model:<20}{'':>23}|")
 
     if model_votes:

@@ -93,13 +93,14 @@ PYBIND11_MODULE(gdp_engine, m) {
 
     // ── GDPAnalyzer ──────────────────────────────────────────────
     py::class_<gdp_engine::GDPAnalyzer>(m, "GDPAnalyzer")
-        .def(py::init<double, double, double, double, double, double, double, double, double>(),
+        .def(py::init<double, double, double, double, double, double, double, double, double, double>(),
              py::arg("cpi"), py::arg("core_gdp"), py::arg("nfp"),
              py::arg("dxy"), py::arg("treasury_3m_pct_change"),
              py::arg("treasury_yield") = 0.0,
              py::arg("unemployment_rate") = 0.0,
              py::arg("consumer_sentiment") = 0.0,
-             py::arg("yield_spread_10y2y") = 0.0)
+             py::arg("yield_spread_10y2y") = 0.0,
+             py::arg("policy_rate") = 0.0)
         .def_property_readonly("signal", &gdp_engine::GDPAnalyzer::getSignal)
         .def_property_readonly("confidence", &gdp_engine::GDPAnalyzer::getConfidence)
         .def_property_readonly("reason", &gdp_engine::GDPAnalyzer::getReason)

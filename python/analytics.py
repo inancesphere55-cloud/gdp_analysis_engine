@@ -174,6 +174,7 @@ class MacroAnalytics:
                     unemployment_rate=test_data.get("unemployment", 0),
                     consumer_sentiment=test_data.get("consumer_sentiment", 0),
                     yield_spread_10y2y=test_data.get("yield_spread_10y2y", 0),
+                    policy_rate=test_data.get("fed_funds", 0),
                 )
                 results.append({
                     f"{variable}_value": round(base_val * multiplier, 2),
@@ -201,6 +202,7 @@ class MacroAnalytics:
             unemployment_rate=base_data.get("unemployment", 0),
             consumer_sentiment=base_data.get("consumer_sentiment", 0),
             yield_spread_10y2y=base_data.get("yield_spread_10y2y", 0),
+            policy_rate=base_data.get("fed_funds", 0),
         )
 
         regime = analyzer.get_regime()

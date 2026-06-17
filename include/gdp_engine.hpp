@@ -130,7 +130,8 @@ public:
                 double treasury_yield = 0.0,
                 double unemployment_rate = 0.0,
                 double consumer_sentiment = 0.0,
-                double yield_spread_10y2y = 0.0);
+                double yield_spread_10y2y = 0.0,
+                double policy_rate = 0.0);
 
     [[nodiscard]] std::string getSignal() const;
     [[nodiscard]] int getConfidence() const;
@@ -149,6 +150,7 @@ private:
     double m_cpi, m_core_gdp, m_nfp, m_dxy;
     double m_treasury_3m, m_treasury_yield;
     double m_unemployment_rate, m_consumer_sentiment, m_yield_spread;
+    double m_policy_rate;
 };
 
 // ── Backtest Types ───────────────────────────────────────────────────
